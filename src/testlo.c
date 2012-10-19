@@ -390,7 +390,7 @@ int main()
     printf("\n");
 
 
-    /* Test blod sizes */
+    /* Test blob sizes */
     if (lo_blob_datasize(btest) != 5 || lo_blobsize(btest) != 12) {
         printf("blob is %d (%d) bytes long, should be 5 (12)\n",
                lo_blob_datasize(btest), lo_blobsize(btest));

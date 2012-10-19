@@ -32,4 +32,9 @@ void lo_method_pp_prefix(lo_method m, const char *p)
     printf("%suser-data: %p\n", p, m->user_data);
 }
 
+void lo_method_set_priority(lo_method m, int priority)
+{
+    m->priority = priority;
+}
+
 /* vi:set ts=8 sts=4 sw=4: */

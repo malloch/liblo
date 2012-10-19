@@ -697,6 +697,14 @@ lo_method lo_server_add_method(lo_server s, const char *path,
                                void *user_data);
 
 /**
+ * \brief Set the priority of an OSC method. If OSC messages are received in a
+ *        bundle or have the same timetag, the priority will set their order.
+ * \param m The method to set the priority for.
+ * \param priority The priority to use, with higher priorities called first.
+ */
+void lo_method_set_priority(lo_method m, int priority);
+
+/**
  * \brief Delete an OSC method from the specifed server.
  *
  * \param s The server the method is to be removed from.
@@ -959,8 +967,9 @@ void lo_method_pp_prefix(lo_method m, const char *p);
 #ifdef ENABLE_THREADS
 /** \brief Pretty-print a lo_server_thread object. */
 void lo_server_thread_pp(lo_server_thread st);
-/** @} */
 #endif
+
+/** @} */
 
 #ifdef __cplusplus
 }

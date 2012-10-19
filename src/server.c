@@ -65,9 +65,11 @@
 #define LO_HOST_SIZE 1024
 
 typedef struct {
-    lo_timetag ts;
     char *path;
     lo_message msg;
+    lo_method m;
+    void *argv;
+    int use_method_typespec;
     int sock;
     void *next;
 } queued_msg_list;
@@ -81,8 +83,9 @@ static void dispatch_method(lo_server s, const char *path,
 static int dispatch_data(lo_server s, void *data,
                          size_t size, int sock);
 static int dispatch_queued(lo_server s, int dispatch_all);
-static void queue_data(lo_server s, lo_timetag ts, const char *path,
-                       lo_message msg, int sock);
+static void queue_message(lo_server s, const char *path,
+                          void *argv, int use_method_typespec,
+                          lo_method m, lo_message msg);
 static lo_server lo_server_new_with_proto_internal(const char *group,
                                                    const char *port,
                                                    const char *iface,
@@ -1340,17 +1343,7 @@ static int dispatch_data(lo_server s, void *data,
                 // set timetag from bundle
                 msg->ts = ts;
 
-                // test for immediate dispatch
-                if ((ts.sec == LO_TT_IMMEDIATE.sec
-                     && ts.frac == LO_TT_IMMEDIATE.frac)
-                    || lo_timetag_diff(ts, now) <= 0.0
-                    || !s->queue_enabled)
-                {
-                    dispatch_method(s, pos, msg, sock);
-                    lo_message_free(msg);
-                } else {
-                    queue_data(s, ts, pos, msg, sock);
-                }
+                dispatch_method(s, pos, msg, sock);
             }
 
             pos += elem_len;
@@ -1367,7 +1360,6 @@ static int dispatch_data(lo_server s, void *data,
             return -result;
         }
         dispatch_method(s, data, msg, sock);
-        lo_message_free(msg);
     }
     return size;
 }
@@ -1385,7 +1377,7 @@ double lo_server_next_event_delay(lo_server s)
         double delay;
 
         lo_timetag_now(&now);
-        delay = lo_timetag_diff(((queued_msg_list *) s->queued)->ts, now);
+        delay = lo_timetag_diff(((queued_msg_list *) s->queued)->msg->ts, now);
 
         delay = delay > 100.0 ? 100.0 : delay;
         delay = delay < 0.0 ? 0.0 : delay;
@@ -1482,9 +1474,8 @@ static void dispatch_method(lo_server s, const char *path,
                 pptr = path;
                 if (it->path)
                     pptr = it->path;
-                ret = it->handler(pptr, types, msg->argv, argc, msg,
-                                  it->user_data);
-
+                queue_message(s, pptr, 0, 0, it, msg);
+                ret = 0;
             } else if (lo_can_coerce_spec(types, it->typespec)) {
                 int i;
                 int opsize = 0;
@@ -1515,11 +1506,9 @@ static void dispatch_method(lo_server s, const char *path,
                 pptr = path;
                 if (it->path)
                     pptr = it->path;
-                ret = it->handler(pptr, it->typespec, argv, argc, msg,
-                                  it->user_data);
-                free(argv);
+                queue_message(s, pptr, argv, 1, it, msg);
+                ret = 0;
                 free(data_co);
-                argv = NULL;
             }
 
             if (ret == 0 && !pattern) {
@@ -1592,9 +1581,6 @@ static void dispatch_method(lo_server s, const char *path,
             lo_message_free(reply);
         }
     }
-
-    if (src) lo_address_free(src);
-    msg->source = NULL;
 }
 
 int lo_server_events_pending(lo_server s)
@@ -1602,21 +1588,25 @@ int lo_server_events_pending(lo_server s)
     return s->queued != 0;
 }
 
-static void queue_data(lo_server s, lo_timetag ts, const char *path,
-                       lo_message msg, int sock)
+static void queue_message(lo_server s, const char *path,
+                          void *argv, int use_method_typespec,
+                          lo_method m, lo_message msg)
 {
     /* insert blob into future dispatch queue */
     queued_msg_list *it = s->queued;
     queued_msg_list *prev = NULL;
     queued_msg_list *ins = calloc(1, sizeof(queued_msg_list));
 
-    ins->ts = ts;
     ins->path = strdup(path);
+    ins->m = m;
+    ins->argv = argv;
+    ins->use_method_typespec = use_method_typespec;
     ins->msg = msg;
-    ins->sock = sock;
+    msg->refcount++;
 
     while (it) {
-        if (lo_timetag_diff(it->ts, ts) > 0.0) {
+        double diff = lo_timetag_diff(it->msg->ts, msg->ts);
+        if (diff > 0.0 || ((diff == 0) && (it->m->priority > m->priority))) {
             if (prev) {
                 prev->next = ins;
             } else {
@@ -1645,6 +1635,7 @@ static int dispatch_queued(lo_server s, int dispatch_all)
     queued_msg_list *head = s->queued;
     queued_msg_list *tailhead;
     lo_timetag disp_time;
+    int ret = 1, refcount;
 
     if (!head) {
         lo_throw(s, LO_INT_ERR, "attempted to dispatch with empty queue",
@@ -1652,24 +1643,32 @@ static int dispatch_queued(lo_server s, int dispatch_all)
         return 1;
     }
 
-    disp_time = head->ts;
+    disp_time = head->msg->ts;
 
     do {
-        char *path;
-        lo_message msg;
-        int sock;
+        char *types;
+        void *argv;
         tailhead = head->next;
-        path = ((queued_msg_list *) s->queued)->path;
-        msg = ((queued_msg_list *) s->queued)->msg;
-        sock = ((queued_msg_list *) s->queued)->sock;
-        dispatch_method(s, path, msg, sock);
-        free(path);
-        lo_message_free(msg);
-        free((queued_msg_list *) s->queued);
+        queued_msg_list *q = s->queued;
+        types = q->use_method_typespec ? (char *)q->m->typespec : q->msg->types+1;
+        argv = q->argv ?: q->msg->argv;
+        
+        refcount = q->msg->refcount--;
+        ret = q->m->handler(q->path, types, argv, q->msg->typelen-1, q->msg,
+                            q->m->user_data);
+        if (refcount <= 0) {
+            if (q->msg->source)
+                free(q->msg->source);
+            lo_message_free(q->msg);
+        }
+        free(q->path);
+        if (q->argv)
+            free(q->argv);
+        free(q);
 
         s->queued = tailhead;
         head = tailhead;
-    } while ((head && lo_timetag_diff(head->ts, disp_time) < FLT_EPSILON)
+    } while ((head && lo_timetag_diff(head->msg->ts, disp_time) < FLT_EPSILON)
              || dispatch_all);
 
     return 0;

@@ -841,6 +841,7 @@ lo_message lo_message_deserialise(void *data, size_t size, int *result)
     msg->source = NULL;
     msg->argv = NULL;
     msg->ts = LO_TT_IMMEDIATE;
+    msg->refcount = 0;
 
     // path
     len = lo_validate_string(data, remain);

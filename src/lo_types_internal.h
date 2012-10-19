@@ -82,6 +82,7 @@ typedef struct _lo_message {
     lo_arg **argv;
     /* timestamp from bundle (LO_TT_IMMEDIATE for unbundled messages) */
     lo_timetag ts;
+    int refcount;
 } *lo_message;
 
 typedef int (*lo_method_handler) (const char *path, const char *types,
@@ -97,6 +98,7 @@ typedef struct _lo_method {
     const char *typespec;
     lo_method_handler handler;
     char *user_data;
+    int priority;
     struct _lo_method *next;
 } *lo_method;
 
