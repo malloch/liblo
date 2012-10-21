@@ -80,9 +80,9 @@ struct lo_cs lo_client_sockets = { -1, -1 };
 static int lo_can_coerce_spec(const char *a, const char *b);
 static int lo_can_coerce(char a, char b);
 static void dispatch_method(lo_server s, const char *path,
-                            lo_message msg, int sock);
+                            lo_message msg, int sock, int in_bundle);
 static int dispatch_data(lo_server s, void *data,
-                         size_t size, int sock);
+                         size_t size, int sock, int in_bundle);
 static int dispatch_queued(lo_server s, int dispatch_all);
 static void queue_message(lo_server s, const char *path,
                           lo_arg **argv, char *data,
@@ -1227,7 +1227,7 @@ int lo_server_recv(lo_server s)
     if (!data) {
         return 0;
     }
-    if (dispatch_data(s, data, size, sock) < 0) {
+    if (dispatch_data(s, data, size, sock, 0) < 0) {
         free(data);
         return -1;
     }
@@ -1293,7 +1293,8 @@ void lo_server_del_socket(lo_server s, int index, int socket)
 }
 
 static int dispatch_data(lo_server s, void *data,
-                         size_t size, int sock)
+                         size_t size, int sock,
+                         int in_bundle)
 {
     int result = 0;
     char *path = data;
@@ -1307,7 +1308,7 @@ static int dispatch_data(lo_server s, void *data,
         char *pos;
         int remain;
         uint32_t elem_len;
-        lo_timetag ts, now;
+        lo_timetag ts;
 
         ssize_t bundle_result = lo_validate_bundle(data, size);
         if (bundle_result < 0) {
@@ -1317,7 +1318,6 @@ static int dispatch_data(lo_server s, void *data,
         pos = (char *) data + len;
         remain = size - len;
 
-        lo_timetag_now(&now);
         ts.sec = lo_otoh32(*((uint32_t *) pos));
         pos += 4;
         ts.frac = lo_otoh32(*((uint32_t *) pos));
@@ -1334,7 +1334,7 @@ static int dispatch_data(lo_server s, void *data,
             remain -= 4;
 
             if (!strcmp(pos, "#bundle")) {
-                dispatch_data(s, pos, elem_len, sock);
+                dispatch_data(s, pos, elem_len, sock, 1);
             } else {
                 msg = lo_message_deserialise(pos, elem_len, &result);
                 if (!msg) {
@@ -1345,7 +1345,7 @@ static int dispatch_data(lo_server s, void *data,
                 // set timetag from bundle
                 msg->ts = ts;
 
-                dispatch_method(s, pos, msg, sock);
+                dispatch_method(s, pos, msg, sock, 1);
             }
 
             pos += elem_len;
@@ -1361,14 +1361,14 @@ static int dispatch_data(lo_server s, void *data,
             lo_throw(s, result, "Invalid message received", path);
             return -result;
         }
-        dispatch_method(s, data, msg, sock);
+        dispatch_method(s, data, msg, sock, in_bundle);
     }
     return size;
 }
 
 int lo_server_dispatch_data(lo_server s, void *data, size_t size)
 {
-    return dispatch_data(s, data, size, -1);
+    return dispatch_data(s, data, size, -1, 0);
 }
 
 /* returns the time in seconds until the next scheduled event */
@@ -1391,7 +1391,8 @@ double lo_server_next_event_delay(lo_server s)
 }
 
 static void dispatch_method(lo_server s, const char *path,
-                            lo_message msg, int sock)
+                            lo_message msg, int sock,
+                            int in_bundle)
 {
     char *types = msg->types + 1;
     int argc = strlen(types);
@@ -1403,6 +1404,7 @@ static void dispatch_method(lo_server s, const char *path,
     char hostname[LO_HOST_SIZE];
     char portname[32];
     const char *pptr;
+    lo_timetag now;
 
     //inet_ntop(s->addr.ss_family, &s->addr.padding, hostname, sizeof(hostname));
     if (s->protocol == LO_UDP && s->addr_len > 0) {
@@ -1464,6 +1466,8 @@ static void dispatch_method(lo_server s, const char *path,
         src->protocol = s->protocol;
     }
 
+    lo_timetag_now(&now);
+
     for (it = s->first; it; it = it->next) {
         /* If paths match or handler is wildcard */
         if (!it->path || !strcmp(path, it->path) ||
@@ -1476,8 +1480,22 @@ static void dispatch_method(lo_server s, const char *path,
                 pptr = path;
                 if (it->path)
                     pptr = it->path;
-                queue_message(s, pptr, 0, 0, 0, it, msg);
-                ret = 0;
+                if (!s->queue_enabled) {
+                    ret = it->handler(pptr, types, msg->argv, argc, msg,
+                                      it->user_data);
+                } else if (in_bundle || lo_timetag_diff(msg->ts, now) > 0.0) {
+                    queue_message(s, pptr, 0, 0, 0, it, msg);
+                    ret = 0;
+                } else if (s->queued &&
+                           lo_timetag_diff(((queued_msg_list *)
+                                            s->queued)->msg->ts, msg->ts) <= 0.0) {
+                    queue_message(s, pptr, 0, 0, 0, it, msg);
+                    dispatch_queued(s, 0);
+                    ret = 0;
+                } else {
+                    ret = it->handler(pptr, types, msg->argv, argc, msg,
+                                      it->user_data);
+                }
             } else if (lo_can_coerce_spec(types, it->typespec)) {
                 int i;
                 int opsize = 0;
@@ -1508,9 +1526,28 @@ static void dispatch_method(lo_server s, const char *path,
                 pptr = path;
                 if (it->path)
                     pptr = it->path;
-                queue_message(s, pptr, argv, data_co, 1, it, msg);
-                ret = 0;
-                //free(data_co);
+                if (!s->queue_enabled) {
+                    ret = it->handler(pptr, it->typespec, argv, argc, msg,
+                                      it->user_data);
+                    free(argv);
+                    free(data_co);
+                    argv = NULL;
+                } else if (in_bundle || lo_timetag_diff(msg->ts, now) > 0.0) {
+                    queue_message(s, pptr, argv, data_co, 1, it, msg);
+                    ret = 0;
+                } else if (s->queued &&
+                           lo_timetag_diff(((queued_msg_list *)
+                                            s->queued)->msg->ts, msg->ts) <= 0.0) {
+                    queue_message(s, pptr, argv, data_co, 1, it, msg);
+                    dispatch_queued(s, 0);
+                    ret = 0;
+                } else {
+                    ret = it->handler(pptr, it->typespec, argv, argc, msg,
+                                      it->user_data);
+                    free(argv);
+                    free(data_co);
+                    argv = NULL;
+                }
             }
 
             if (ret == 0 && !pattern) {
