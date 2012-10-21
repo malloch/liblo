@@ -68,7 +68,8 @@ typedef struct {
     char *path;
     lo_message msg;
     lo_method m;
-    void *argv;
+    lo_arg **argv;
+    char *data;
     int use_method_typespec;
     int sock;
     void *next;
@@ -84,7 +85,8 @@ static int dispatch_data(lo_server s, void *data,
                          size_t size, int sock);
 static int dispatch_queued(lo_server s, int dispatch_all);
 static void queue_message(lo_server s, const char *path,
-                          void *argv, int use_method_typespec,
+                          lo_arg **argv, char *data,
+                          int use_method_typespec,
                           lo_method m, lo_message msg);
 static lo_server lo_server_new_with_proto_internal(const char *group,
                                                    const char *port,
@@ -1474,7 +1476,7 @@ static void dispatch_method(lo_server s, const char *path,
                 pptr = path;
                 if (it->path)
                     pptr = it->path;
-                queue_message(s, pptr, 0, 0, it, msg);
+                queue_message(s, pptr, 0, 0, 0, it, msg);
                 ret = 0;
             } else if (lo_can_coerce_spec(types, it->typespec)) {
                 int i;
@@ -1506,9 +1508,10 @@ static void dispatch_method(lo_server s, const char *path,
                 pptr = path;
                 if (it->path)
                     pptr = it->path;
-                queue_message(s, pptr, argv, 1, it, msg);
+                printf("coerced message, using argv = %p, data_co = %p\n", argv, data_co);
+                queue_message(s, pptr, argv, data_co, 1, it, msg);
                 ret = 0;
-                free(data_co);
+                //free(data_co);
             }
 
             if (ret == 0 && !pattern) {
@@ -1589,7 +1592,8 @@ int lo_server_events_pending(lo_server s)
 }
 
 static void queue_message(lo_server s, const char *path,
-                          void *argv, int use_method_typespec,
+                          lo_arg **argv, char *data,
+                          int use_method_typespec,
                           lo_method m, lo_message msg)
 {
     /* insert blob into future dispatch queue */
@@ -1600,6 +1604,7 @@ static void queue_message(lo_server s, const char *path,
     ins->path = strdup(path);
     ins->m = m;
     ins->argv = argv;
+    ins->data = data;
     ins->use_method_typespec = use_method_typespec;
     ins->msg = msg;
     msg->refcount++;
@@ -1647,14 +1652,16 @@ static int dispatch_queued(lo_server s, int dispatch_all)
 
     do {
         char *types;
-        void *argv;
+        lo_arg **argv;
         tailhead = head->next;
         queued_msg_list *q = s->queued;
         types = q->use_method_typespec ? (char *)q->m->typespec : q->msg->types+1;
         argv = q->argv ?: q->msg->argv;
+        int argc = q->msg->typelen-1;
+        printf("dispatching message with argv = %p\n", argv);
         
         refcount = q->msg->refcount--;
-        ret = q->m->handler(q->path, types, argv, q->msg->typelen-1, q->msg,
+        ret = q->m->handler(q->path, types, argv, argc, q->msg,
                             q->m->user_data);
         if (refcount <= 0) {
             if (q->msg->source)
@@ -1662,8 +1669,10 @@ static int dispatch_queued(lo_server s, int dispatch_all)
             lo_message_free(q->msg);
         }
         free(q->path);
-        if (q->argv)
+        if (q->argv) {
             free(q->argv);
+            free(q->data);
+        }
         free(q);
 
         s->queued = tailhead;
