@@ -1508,7 +1508,6 @@ static void dispatch_method(lo_server s, const char *path,
                 pptr = path;
                 if (it->path)
                     pptr = it->path;
-                printf("coerced message, using argv = %p, data_co = %p\n", argv, data_co);
                 queue_message(s, pptr, argv, data_co, 1, it, msg);
                 ret = 0;
                 //free(data_co);
@@ -1658,8 +1657,6 @@ static int dispatch_queued(lo_server s, int dispatch_all)
         types = q->use_method_typespec ? (char *)q->m->typespec : q->msg->types+1;
         argv = q->argv ?: q->msg->argv;
         int argc = q->msg->typelen-1;
-        printf("dispatching message with argv = %p\n", argv);
-        
         refcount = q->msg->refcount--;
         ret = q->m->handler(q->path, types, argv, argc, q->msg,
                             q->m->user_data);
