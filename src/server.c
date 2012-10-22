@@ -658,6 +658,24 @@ void lo_server_free(lo_server s)
             free(s->path);
             s->path = NULL;
         }
+        if (s->queued) {
+            queued_msg_list *q;
+            while (s->queued) {
+                q = s->queued;
+                if (--q->msg->refcount <= 0) {
+                    if (q->msg->source)
+                        free(q->msg->source);
+                    lo_message_free(q->msg);
+                }
+                free(q->path);
+                if (q->argv) {
+                    free(q->argv);
+                    free(q->data);
+                }
+                s->queued = q->next;
+                free(q);
+            }
+        }
         for (it = s->first; it; it = next) {
             next = it->next;
             free((char *) it->path);
