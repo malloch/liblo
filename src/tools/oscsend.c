@@ -31,14 +31,20 @@
 #include <errno.h>
 #include <config.h>
 #include <limits.h>
+#include <unistd.h>
 #include <lo/lo.h>
+
+static FILE* input_file = 0;
+static double multiplier = 1.0/((double)(1LL<<32));
 
 void usage(void)
 {
     printf("oscsend version %s\n"
            "Copyright (C) 2008 Kentaro Fukuchi\n\n"
-           "Usage: oscsend hostname port address types values...\n"
-           "or     oscsend url address types values...\n"
+           "Usage: oscsend hostname port path types values...\n"
+           "or     oscsend hostname port file\n"
+           "or     oscsend url path types values...\n"
+           "or     oscsend url file\n"
            "Send OpenSound Control message via UDP.\n\n"
            "Description\n"
            "hostname: specifies the remote host's name.\n"
@@ -47,8 +53,9 @@ void usage(void)
            "          e.g. UDP        \"osc.udp://localhost:9000\"\n"
            "               Multicast  \"osc.udp://224.0.1.9:9000\"\n"
            "               TCP        \"osc.tcp://localhost:9000\"\n\n"
-           "address : the OSC address where the message to be sent.\n"
-           "types   : specifies the types of the following values.\n",
+           "path    : the OSC path where the message to be sent.\n"
+           "types   : specifies the types of the following values.\n"
+           "file    : name of file containing messages to send.\n",
            VERSION);
     printf("          %c - 32bit integer\n", LO_INT32);
     printf("          %c - 64bit integer\n", LO_INT64);
@@ -78,7 +85,8 @@ lo_message create_message(char **argv)
      */
     int i, argi;
     lo_message message;
-    const char *types, *arg;
+    const char *types;
+    char *arg;
     int values;
 
     message = lo_message_new();
@@ -191,11 +199,13 @@ lo_message create_message(char **argv)
                 break;
             }
         case LO_STRING:
-            lo_message_add_string(message, arg);
-            argi++;
-            break;
         case LO_SYMBOL:
-            lo_message_add_symbol(message, arg);
+            if (arg[strlen(arg)-1] == '"')
+                arg[strlen(arg)-1] = '\0';
+            if (arg[0] == '"')
+                lo_message_add_string(message, arg+1);
+            else
+                lo_message_add_string(message, arg);
             argi++;
             break;
         case LO_CHAR:
@@ -249,13 +259,159 @@ lo_message create_message(char **argv)
     return NULL;
 }
 
+void timetag_add(lo_timetag *tt, lo_timetag addend)
+{
+    tt->sec += addend.sec;
+    tt->frac += addend.frac;
+    if (tt->frac < addend.frac) // overflow
+        tt->sec++;
+}
+
+void timetag_subtract(lo_timetag *tt, lo_timetag subtrahend)
+{
+    tt->sec -= subtrahend.sec;
+    if (tt->frac < subtrahend.frac) // overflow
+        --tt->sec;
+    tt->frac -= subtrahend.frac;
+}
+
+double timetag_diff(const lo_timetag a, const lo_timetag b)
+{
+    return ((double)a.sec - (double)b.sec +
+            ((double)a.frac - (double)b.frac) * multiplier);
+}
+
+double timetag_double(const lo_timetag tt)
+{
+    return (double)tt.sec + (double)tt.frac * multiplier;
+}
+
+void timetag_multiply(lo_timetag *tt, double d)
+{
+    d *= timetag_double(*tt);
+    tt->sec = floor(d);
+    d -= tt->sec;
+    tt->frac = (uint32_t) (d * (double)(1LL<<32));
+}
+
+int send_file(lo_address target) {
+    const char *delim = " \r\n";
+    char *args[64];
+    char str[1024], *p, *s, *path;
+    lo_timetag tt_start = {0, 0}, tt_start_file, tt_now;
+    lo_timetag tt1 = {0, 0}, tt2 = {0, 0}, *tt_last = &tt1, *tt_this = &tt2;
+    int tt_init = 0, ret;
+    lo_message m;
+    lo_bundle b = 0;
+
+    lo_timetag_now(&tt_start);
+
+    while (fgets(str, 1024, input_file)) {
+        path = 0;
+        s = strtok_r(str, delim, &p);
+        m = lo_message_new();
+        if (!m)
+            return 1;
+
+        if (s) {
+            // check if first arg is timetag
+            if (isdigit((int)s[0])) {
+                // first argument is timetag
+                char *ttstr = strtok(s, ".");
+                if (ttstr) {
+                    tt_this->sec = atoi(ttstr);
+                    if (!tt_init)
+                        tt_start_file.sec = tt_this->sec;
+                }
+                ttstr = strtok(0, ".");
+                if (ttstr) {
+                    tt_this->frac = atoi(ttstr);
+                    if (!tt_init)
+                        tt_start_file.frac = tt_this->frac;
+                }
+                if (1) {
+                    timetag_subtract(tt_this, tt_start_file);
+                    timetag_multiply(tt_this, 2.0);
+                    timetag_add(tt_this, tt_start);
+                }
+                else {
+                    if (!tt_init)
+                        timetag_subtract(&tt_start, tt_start_file);
+                    timetag_add(tt_this, tt_start);
+                }
+                tt_init = 1;
+                s = strtok_r(0, delim, &p);
+            }
+            else {
+                tt_this->sec = 0;
+                tt_this->frac = 1;
+            }
+        }
+        if (s)
+            path = s;
+        else
+            continue;
+
+        s = strtok_r(0, delim, &p);
+        if (s)
+            args[0] = s;    // types
+
+        int i = 0;
+        while ((s = strtok_r(0, delim, &p))) {
+            args[++i] = s;
+        }
+
+        m = create_message(args);
+        if (!m) {
+            fprintf(stderr, "Failed to create OSC message.\n");
+            return 1;
+        }
+
+        if (b && memcmp(tt_this, tt_last, sizeof(lo_timetag))==0) {
+            lo_bundle_add_message(b, path, m);
+        }
+        else {
+            // wait for timestamp?
+            lo_timetag_now(&tt_now);
+            double wait_time = timetag_diff(*tt_last, tt_now);
+            if (wait_time > 0.) {
+                usleep(wait_time * 1000000);
+            }
+            if (b) {
+                ret = lo_send_bundle(target, b);
+            }
+            b = lo_bundle_new(*tt_this);
+            lo_bundle_add_message(b, path, m);
+
+            lo_timetag *tmp = tt_last;
+            tt_last = tt_this;
+            tt_this = tmp;
+        }
+
+        if (ret == -1)
+            return ret;
+    }
+
+    if (b) {
+        // wait for timestamp?
+        lo_timetag_now(&tt_now);
+        double wait_time = timetag_diff(*tt_last, tt_now);
+        if (wait_time > 0.) {
+            usleep(wait_time * 1000000);
+        }
+        lo_send_bundle(target, b);
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     lo_address target;
     lo_message message;
     int ret, i=1;
 
-    if (argc < 3) {
+    if (argc < 2) {
         usage();
         exit(1);
     }
@@ -283,23 +439,33 @@ int main(int argc, char **argv)
             fprintf(stderr, "Failed to open %s:%s\n", argv[i], argv[i+1]);
             exit(1);
         }
+        lo_address_set_ttl(target, 1);
         i += 2;
     }
 
     if (argv[i] == NULL) {
-        fprintf(stderr, "No path is given.\n");
+        fprintf(stderr, "No %s given.\n", argc == i+1 ? "filename" : "path");
         exit(1);
     }
 
-    lo_address_set_ttl(target, 1);
-
-    message = create_message(&argv[i+1]);
-    if (message == NULL) {
-        fprintf(stderr, "Failed to create OSC message.\n");
-        exit(1);
+    if (argc == i+1) {
+        // remaining arg should be filename
+        input_file = fopen(argv[i], "r");
+        if (!input_file) {
+            fprintf(stderr, "Failed to open file `%s' for reading.\n", argv[i]);
+            exit(1);
+        }
+        ret = send_file(target);
+    }
+    else {
+        message = create_message(&argv[i+1]);
+        if (message == NULL) {
+            fprintf(stderr, "Failed to create OSC message.\n");
+            exit(1);
+        }
+        ret = lo_send_message(target, argv[i], message);
     }
 
-    ret = lo_send_message(target, argv[i], message);
     if (ret == -1) {
         fprintf(stderr, "An error occured: %s\n",
                 lo_address_errstr(target));
