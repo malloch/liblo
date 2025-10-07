@@ -71,7 +71,7 @@ void *sendthread(void *arg)
 
     lo_address_free(a);
 
-    printf("%p.freeing\n", s);
+    printf("%p.freeing thread\n", s);
     lo_server_free(s);
 
     return 0;
@@ -112,6 +112,14 @@ int main()
         goto done;
     }
     printf("%p.done receiving2\n", s);
+
+    printf("%p.receiving3..\n", s);
+    if (!lo_server_recv_noblock(s, 10000)) {
+        printf("%p.error receiving3\n", s);
+        res = 1;
+        goto done;
+    }
+    printf("%p.done receiving3\n", s);
 
 done:
 

@@ -1337,6 +1337,7 @@ int lo_servers_wait(lo_server *s, int *status, int num_servers, int timeout)
 static
 int lo_servers_wait_internal(lo_server *s, int *recvd, int *queued, int num_servers, int timeout)
 {
+    printf("lo_servers_wait_internal(%d)\n", timeout);
     int i, j, k, res, sched_timeout;
     assert(recvd && queued);
 
@@ -1433,9 +1434,9 @@ int lo_servers_wait_internal(lo_server *s, int *recvd, int *queued, int num_serv
                     if (!sockets[k].revents)
                         continue;
                     if (sockets[k].revents & (POLLERR | POLLHUP)) {
+                        printf("got HANGUP on socket %d of %d\n", i, s[j]->sockets_len);
                         closesocket(sockets[k].fd);
                         lo_server_del_socket(s[j], i, sockets[k].fd);
-                        s[j]->sockets[i].revents = 0;
                     }
                     else {
                         s[j]->sockets[i].revents = POLLIN;
