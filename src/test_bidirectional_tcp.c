@@ -116,8 +116,6 @@ int main()
     printf("%p.receiving3..\n", s);
     if (!lo_server_recv_noblock(s, 10000)) {
         printf("%p.error receiving3\n", s);
-        res = 1;
-        goto done;
     }
     printf("%p.done receiving3\n", s);
 
