@@ -1400,6 +1400,7 @@ int lo_servers_wait_internal(lo_server *s, int *recvd, int *queued, int num_serv
         return -1;
     else if (res) {
         for (j = 0, k = 0; j < num_servers; j++) {
+            printf("outer loop, i: %d, j: %d, k: %d\n", i, j, k);
             if (s[j]->protocol == LO_TCP) {
                 if (sockets[k].revents & (POLLIN | POLLPRI)) {
                     // If poll() was reporting a new connection on the listening
@@ -1431,25 +1432,25 @@ int lo_servers_wait_internal(lo_server *s, int *recvd, int *queued, int num_serv
                  * order of the array to the left of the index. */
 
                 for (i = s[j]->sockets_len - 1, k += i; i > 0; i--, k--) {
-		  printf("i: %d, j: %d, sockets[k].revents: %d\n", i, j, sockets[k].revents);
-		    if (!sockets[k].revents)
+                    printf("inner loop, i: %d, j: %d, k: %d, sockets[k].revents: %d\n", i, j, k, sockets[k].revents);
+                    if (!sockets[k].revents)
                         continue;
                     if (sockets[k].revents & (POLLERR | POLLHUP)) {
-		        printf("POLLERR | POLLHUP\n");
+                        printf("POLLERR | POLLHUP\n");
                         closesocket(sockets[k].fd);
-		        printf("here0\n");
+                        printf("here0\n");
                         lo_server_del_socket(s[j], i, sockets[k].fd);
-		        printf("here1\n");
+                        printf("here1\n");
                         s[j]->sockets[i].revents = 0;
-		        printf("here2\n");
-			/* exit(1); */
+                        printf("here2\n");
+                        /* exit(1); */
                     }
                     else {
-		      printf("xhere0\n");
+                      printf("xhere0\n");
                         s[j]->sockets[i].revents = POLLIN;
-		      printf("xhere1\n");
+                      printf("xhere1\n");
                         recvd[j] = 1;
-		      printf("xhere2\n");
+                      printf("xhere2\n");
                     }
                 }
             }
@@ -1572,6 +1573,8 @@ int lo_servers_wait_internal(lo_server *s, int *recvd, int *queued, int num_serv
 #endif
 #endif
 
+    printf("done poll part\n");
+
     for (j = 0; j < num_servers; j++) {
         if (lo_server_next_event_delay(s[j]) < 0.01) {
             queued[j] = 1;
@@ -1580,6 +1583,8 @@ int lo_servers_wait_internal(lo_server *s, int *recvd, int *queued, int num_serv
 
     for (i = 0, j = 0; i < num_servers; i++)
         j += (recvd[i] | queued[i]);
+
+    printf("return %d\n", j);
 
     return j;
 }
