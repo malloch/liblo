@@ -1157,12 +1157,13 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
 
     if (bytes_recv <= 0)
     {
+        printf("errno == EAGAIN\n");
         if (errno == EAGAIN)
             return 0;
 
         // Error, or socket was closed.
         // Either way, we remove it from the server.
-	printf("closesocket due to bytes_recv=%d\n", bytes_recv);
+        printf("closesocket due to bytes_recv=%d\n", bytes_recv);
         closesocket(s->sockets[isock].fd);
         lo_server_del_socket(s, isock, s->sockets[isock].fd);
         return 0;
@@ -1441,8 +1442,6 @@ int lo_servers_wait_internal(lo_server *s, int *recvd, int *queued, int num_serv
                         printf("here0\n");
                         lo_server_del_socket(s[j], i, sockets[k].fd);
                         printf("here1\n");
-                        s[j]->sockets[i].revents = 0;
-                        printf("here2\n");
                         /* exit(1); */
                     }
                     else {
@@ -1687,11 +1686,13 @@ int lo_server_recv_internal(lo_server s)
     }
 
     if (!data) {
+        printf("no data!\n");
         return 0;
     }
 
   got_data:
     i = dispatch_data(s, data, size, sock);
+    printf("after dispatch, i: %d\n", i);
     free(data);
     if (i < 0) {
         return -1;
