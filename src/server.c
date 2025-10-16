@@ -1097,6 +1097,7 @@ static
 int lo_server_recv_raw_stream_socket(lo_server s, int isock,
                                      size_t *psize, void **pdata)
 {
+    printf("lo_server_recv_raw_stream_socket(isock: %d\n", isock);
     struct socket_context *sc = &s->contexts[isock];
     char *stack_buffer = 0, *read_into;
     uint32_t msg_len;
@@ -1147,7 +1148,7 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
     // In SLIP mode, we instead read into the local stack buffer
     if (sc->is_slip == 1)
     {
-        printf("slip mode\n");
+        printf("  slip mode\n");
         stack_buffer = (char*) alloca(buffer_bytes_left - sizeof(uint32_t));
         read_into = stack_buffer;
     }
@@ -1156,7 +1157,7 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
                             read_into,
                             buffer_bytes_left, 0);
 
-    printf("bytes_recv(%d): %d\n", isock, bytes_recv);
+    printf("  bytes_recv(%d): %d\n", isock, bytes_recv);
 
     if (bytes_recv <= 0)
     {
@@ -1166,7 +1167,7 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
 
         // Error, or socket was closed.
         // Either way, we remove it from the server.
-        printf("closesocket due to bytes_recv=%d\n", bytes_recv);
+        printf("  closesocket due to bytes_recv=%d\n", bytes_recv);
         closesocket(s->sockets[isock].fd);
         lo_server_del_socket(s, isock, s->sockets[isock].fd);
         return 0;
@@ -1188,6 +1189,8 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
             sc->buffer_read_offset += sizeof(uint32_t);
         }
     }
+
+    printf("  sc->is_slip: %d\n", sc->is_slip);
 
     if (sc->is_slip == 1)
     {
@@ -1263,8 +1266,11 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
     {
         // There could be more data, try recv() again.  This is okay
         // because we set the O_NONBLOCK flag.
+        printf("  again!\n");
         goto again;
     }
+
+    printf("  bytes_recv: %d, buffer_bytes_left: %d\n", bytes_recv, buffer_bytes_left);
 
     // We need to inform the caller whether there may be data left
     // to read, which is true if we read exactly as much as we
@@ -1275,6 +1281,7 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
 static
 void *lo_server_recv_raw_stream(lo_server s, size_t * size, int *psock)
 {
+    printf("lo_server_recv_raw_stream()\n");
     int i;
     void *data = NULL;
     int sock = -1;
@@ -1298,7 +1305,9 @@ void *lo_server_recv_raw_stream(lo_server s, size_t * size, int *psock)
      * order of the array to the left of the index. */
 
     for (i = s->sockets_len - 1; i >= 0 && !data; i--) {
+        printf("  checking socket %d\n", i);
         if (s->sockets[i].revents) {
+            printf("  has revents %d\n", s->sockets[i].revents);
             sock = s->sockets[i].fd;
             if (sock == -1)
                 return NULL;
@@ -1310,6 +1319,7 @@ void *lo_server_recv_raw_stream(lo_server s, size_t * size, int *psock)
                 // There could be more data waiting
                 //*more = 1;
             }
+            printf("  data: %p\n", data);
             if (data)
                 *psock = s->sockets[i].fd;
         }
