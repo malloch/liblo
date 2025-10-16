@@ -1147,6 +1147,7 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
     // In SLIP mode, we instead read into the local stack buffer
     if (sc->is_slip == 1)
     {
+        printf("slip mode\n");
         stack_buffer = (char*) alloca(buffer_bytes_left - sizeof(uint32_t));
         read_into = stack_buffer;
     }
@@ -1154,6 +1155,8 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
     bytes_recv = (int) recv(s->sockets[isock].fd,
                             read_into,
                             buffer_bytes_left, 0);
+
+    printf("bytes_recv(%d): %d\n", isock, bytes_recv);
 
     if (bytes_recv <= 0)
     {
