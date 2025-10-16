@@ -1664,20 +1664,26 @@ int lo_server_recv(lo_server s)
 static
 int lo_server_recv_internal(lo_server s)
 {
+    printf("lo_server_recv_internal()\n");
     void *data;
     size_t size;
     int sock = -1;
     int i = 0;
 
     if (s->protocol == LO_TCP) {
+        printf("  using TCP\n");
         for (i = s->sockets_len - 1; i >= 0; i--) {
+            printf("  checking socket %d\n", i);
             // first check if there are additional messages in the buffer
             if ((data = lo_server_buffer_copy_for_dispatch(s, i, &size))) {
                 sock = s->sockets[i].fd;
+                printf("  got data\n");
                 goto got_data;
             }
-            if (s->sockets[i].revents)
+            if (s->sockets[i].revents) {
+                printf("  socket %d has revents %d, breaking loop\n", i, s->sockets[i].revents);
                 break;
+            }
         }
         data = lo_server_recv_raw_stream(s, &size, &sock);
     }
