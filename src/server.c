@@ -1040,8 +1040,13 @@ uint32_t lo_server_buffer_contains_msg(lo_server s, int isock)
 {
     printf("lo_server_buffer_contains_msg(isock:%d)\n", isock);
     struct socket_context *sc = &s->contexts[isock];
-    if (sc->buffer_read_offset <= sizeof(uint32_t))
+    if (sc->buffer_read_offset <= sizeof(uint32_t)) {
+        if (sc->buffer_read_offset == sizeof(uint32_t))
+            printf("  only msg_len %u in buffer\n", ntohl(*(uint32_t*)sc->buffer));
+        else
+            printf("  no bytes in buffer\n");
         return 0;
+    }
 
     printf("zhere\n");
 
@@ -1665,26 +1670,28 @@ int lo_server_recv(lo_server s)
 {
     int ret, recvd, queued;
     printf("lo_server_recv\n");
-    while ((ret = lo_servers_wait_internal(&s, &recvd, &queued, 1, 100)) == 0) {
-        printf("here in lo_server_recv loop\n");
-    }
-    printf("done lo_server_recv loop: ret=%d, recvd=%d, queued=%d\n", ret, recvd, queued);
-    if (ret > 0) {
-        // new messages might be queued for future dispatch, in which case any queued msgs that are ready should take precedence
-        printf("yhere0\n");
-        if (recvd && (ret = lo_server_recv_internal(s))) {
-            printf("yhere1\n");
-            // new message was received and dispatched
-            return ret;
+//    while (1) {
+        while ((ret = lo_servers_wait_internal(&s, &recvd, &queued, 1, 100)) == 0) {
+            printf("here in lo_server_recv loop\n");
         }
-        else if (queued) {
-            printf("yhere2\n");
-            // queued message is ready for dispatch
-            return dispatch_queued(s, 0);
+        printf("done lo_server_recv loop: ret=%d, recvd=%d, queued=%d\n", ret, recvd, queued);
+        if (ret > 0) {
+            // new messages might be queued for future dispatch, in which case any queued msgs that are ready should take precedence
+            printf("yhere0\n");
+            if (recvd && (ret = lo_server_recv_internal(s))) {
+                printf("yhere1\n");
+                // new message was received and dispatched
+                return ret;
+            }
+            else if (queued) {
+                printf("yhere2\n");
+                // queued message is ready for dispatch
+                return dispatch_queued(s, 0);
+            }
+            printf("yhere3\n");
         }
-        printf("yhere3\n");
-    }
-    printf("yhere4\n");
+        printf("yhere4 **** would have returned ****\n");
+//    }
     return 0;
 }
 
