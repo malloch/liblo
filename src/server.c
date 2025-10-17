@@ -1038,27 +1038,34 @@ void cleanup_context(struct socket_context *sc)
 static
 uint32_t lo_server_buffer_contains_msg(lo_server s, int isock)
 {
+    printf("lo_server_buffer_contains_msg(isock:%d)\n", isock);
     struct socket_context *sc = &s->contexts[isock];
     if (sc->buffer_read_offset <= sizeof(uint32_t))
         return 0;
+
+    printf("zhere\n");
 
     uint32_t msg_len = ntohl(*(uint32_t*)sc->buffer);
     char *str = (char*)(sc->buffer + sizeof(uint32_t));
     if (str[0] != '/' && str[0] != '#')
     {
+        printf("zhere.invalid\n");
         // invalid message
         goto clear_buffer;
     }
     if (msg_len + sizeof(uint32_t) > sc->buffer_read_offset)
     {
+        printf("zhere.waiting\n");
         // still waiting for the rest of message
         return 0;
     }
     if (msg_len && lo_validate_string(str, msg_len) < 0)
         goto clear_buffer;
+    printf("zhere.msg_len:%d\n", msg_len);
     return msg_len;
 
 clear_buffer:
+    printf("zhere.clear\n");
     sc->buffer_read_offset = sc->buffer_msg_offset = 0;
     return 0;
 }
@@ -1068,11 +1075,14 @@ clear_buffer:
 static
 void *lo_server_buffer_copy_for_dispatch(lo_server s, int isock, size_t *psize)
 {
+    printf("lo_server_buffer_copy_for_dispatch()\n");
     void *data;
     struct socket_context *sc = &s->contexts[isock];
     uint32_t msg_len = lo_server_buffer_contains_msg(s, isock);
-    if (msg_len == 0)
+    if (msg_len == 0) {
+        printf("  no msg, returning\n");
         return NULL;
+    }
 
     data = malloc(msg_len);
     memcpy(data, sc->buffer + sizeof(uint32_t), msg_len);
@@ -1097,7 +1107,7 @@ static
 int lo_server_recv_raw_stream_socket(lo_server s, int isock,
                                      size_t *psize, void **pdata)
 {
-    printf("lo_server_recv_raw_stream_socket(isock: %d\n", isock);
+    printf("lo_server_recv_raw_stream_socket(isock: %d)\n", isock);
     struct socket_context *sc = &s->contexts[isock];
     char *stack_buffer = 0, *read_into;
     uint32_t msg_len;
@@ -1175,6 +1185,7 @@ int lo_server_recv_raw_stream_socket(lo_server s, int isock,
 
     // If unknown, check whether we are in a SLIP stream.
     if (sc->is_slip == -1 && (sc->buffer_read_offset + bytes_recv) >= 4) {
+        printf("  checking for slip\n");
         sc->is_slip = detect_slip((unsigned char*)(sc->buffer + sc->buffer_msg_offset));
         sc->slip_state = 0;
 
@@ -1309,8 +1320,10 @@ void *lo_server_recv_raw_stream(lo_server s, size_t * size, int *psock)
         if (s->sockets[i].revents) {
             printf("  has revents %d\n", s->sockets[i].revents);
             sock = s->sockets[i].fd;
-            if (sock == -1)
+            if (sock == -1) {
+                // should we continue with other sockets here?
                 return NULL;
+            }
 
             /* Handle incoming socket data */
             if (lo_server_recv_raw_stream_socket(s, i, size, &data)
@@ -1320,8 +1333,10 @@ void *lo_server_recv_raw_stream(lo_server s, size_t * size, int *psock)
                 //*more = 1;
             }
             printf("  data: %p\n", data);
-            if (data)
+            if (data) {
                 *psock = s->sockets[i].fd;
+//                return data;
+            }
         }
     }
 
